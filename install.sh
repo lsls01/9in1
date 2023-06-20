@@ -2901,6 +2901,7 @@ initTuicPort() {
         echoContent red " ---> 端口不合法"
         initTuicPort "$2"
     fi
+    echoContent green "\n ---> 端口: ${tuicPort}"
     allowPort "${tuicPort}"
     allowPort "${tuicPort}" "udp"
 }
@@ -2937,7 +2938,6 @@ initTuicConfig() {
 
     initTuicPort
     initTuicProtocol
-    echo 1
     cat <<EOF >/etc/v2ray-agent/tuic/conf/config.json
 {
     "server": "[::]:${tuicPort}",
@@ -4055,6 +4055,37 @@ EOF
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/default/${user}"
 hysteria://${currentHost}:${hysteriaPort}?${mport}protocol=${hysteriaProtocol}&auth=${id}&peer=${currentHost}&insecure=0&alpn=h3&upmbps=${hysteriaClientUploadSpeed}&downmbps=${hysteriaClientDownloadSpeed}#${hysteriaEmail}
 EOF
+        echoContent yellow " ---> v2rayN(hysteria+TLS)"
+        cat <<EOF >"/etc/v2ray-agent/hysteria/conf/client.json"
+{
+  server: "${currentHost}:34356",
+  protocol: "${hysteriaProtocol}",
+  up_mbps: "${hysteriaClientUploadSpeed}"
+  down_mbps: "${hysteriaClientDownloadSpeed}"
+  http: { listen: "127.0.0.1:10809", timeout: 300, disable_udp: false },
+  socks5: { listen: "127.0.0.1:10808", timeout: 300, disable_udp: false },
+  alpn: "h3",
+  acl: "acl/routes.acl",
+  mmdb: "acl/Country.mmdb",
+  server_name: "${currentHost}",
+  insecure: false,
+  recv_window_conn: 5767168,
+  recv_window: 23068672,
+  disable_mtu_discovery: true,
+  resolver: "https://223.5.5.5/dns-query",
+  retry: 3,
+  retry_interval: 3,
+  quit_on_disconnect: false,
+  handshake_timeout: 15,
+  idle_timeout: 30,
+  fast_open: true,
+  hop_interval: 120
+}
+EOF
+        local v2rayNConf=
+        v2rayNConf="$(cat /etc/v2ray-agent/hysteria/conf/client.json)"
+        echoContent green "${v2rayNConf}\n"
+
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${user}"
   - name: "${hysteriaEmail}"
     type: hysteria
@@ -4128,15 +4159,38 @@ EOF
         echoContent yellow " ---> 二维码 VLESS(VLESS+reality+uTLS+gRPC)"
         echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=vless%3A%2F%2F${id}%40$(getPublicIP)%3A${currentRealityPort}%3Fencryption%3Dnone%26security%3Dreality%26type%3Dgrpc%26sni%3D${currentRealityServerNames}%26fp%3Dchrome%26pbk%3D${currentRealityPublicKey}%26path%3Dgrpc%26serviceName%3Dgrpc%23${email}\n"
     elif [[ "${type}" == "tuic" ]]; then
-        echoContent yellow " ---> Tuic(TLS)"
 
-        echoContent yellow " ---> 格式化明文(Tuic+TlS)"
-        echoContent green "    协议类型:Tuic，地址:${currentHost}，端口：${tuicPort}，uuid：${id}，password：${id}，congestion-controller:${tuicAlgorithm}，alpn: h3，账户名:${id}\n"
-        local tuicUser=
-        tuicUser=$(echo "${id}" | awk -F "[-]" '{print $1}')
+        if [[ -z "${email}" ]]; then
+            echoContent red " ---> 读取配置失败，请重新安装"
+            exit 0
+        fi
 
-        cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${tuicUser}"
-  - name: "${tuicUser}_tuic"
+        echoContent yellow " ---> 格式化明文(Tuic+TLS)"
+        echoContent green "    协议类型:Tuic，地址:${currentHost}，端口：${tuicPort}，uuid：${id}，password：${id}，congestion-controller:${tuicAlgorithm}，alpn: h3，账户名:${email}_tuic\n"
+
+        echoContent yellow " ---> v2rayN(Tuic+TLS)"
+        cat <<EOF >"/etc/v2ray-agent/tuic/conf/v2rayN.json"
+{
+    "relay": {
+        "server": "${currentHost}:${tuicPort}",
+        "uuid": "${id}",
+        "password": "${id}",
+        "ip": "$(getPublicIP)",
+        "congestion_control": "${tuicAlgorithm}",
+        "alpn": ["h3"]
+    },
+    "local": {
+        "server": "127.0.0.1:7798"
+    },
+    "log_level": "warn"
+}
+EOF
+        local v2rayNConf=
+        v2rayNConf="$(cat /etc/v2ray-agent/tuic/conf/v2rayN.json)"
+        echoContent green "${v2rayNConf}"
+
+        cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${email}"
+  - name: "${email}_tuic"
     server: ${currentHost}
     type: tuic
     port: ${tuicPort}
@@ -4350,16 +4404,16 @@ showAccounts() {
     # tuic
     if echo ${currentInstallProtocolType} | grep -q 9; then
         echoContent skyBlue "\n================================  Tuic TLS  ================================\n"
-        echoContent red "\n --->Tuic速度依赖与本地的网络环境，如果被QoS使用体验会非常差"
+        echoContent yellow "\n --->Tuic相对于Hysteria会更加温 使用体验可能会更流畅。"
 
-        jq .users[] ${tuicConfigPath}config.json | while read -r email; do
-            local password=
-            password=$(jq -r .users.${email} ${tuicConfigPath}config.json)
+        jq -r .users[] ${tuicConfigPath}config.json | while read -r id; do
+            local tuicEmail=
+            tuicEmail=$(jq -r '.inbounds[0].settings.clients[]|select(.id=="'"${id}"'")|.email' ${configPath}${frontingType}.json | awk -F "[-]" '{print $1}')
 
-            if [[ -n ${password} ]]; then
-                echoContent skyBlue "\n ---> 账号:$(echo "${email}")"
+            if [[ -n ${tuicEmail} ]]; then
+                echoContent skyBlue "\n ---> 账号:${tuicEmail}_tuic"
                 echo
-                defaultBase64Code tuic "${email}" "${password}"
+                defaultBase64Code tuic "${tuicEmail}" "${id}"
             fi
 
         done
@@ -4793,7 +4847,6 @@ customUserEmail() {
 # 添加用户
 addUserXray() {
     readConfigHostPathUUID
-    echoContent yellow "添加新用户后，需要重新查看订阅"
     read -r -p "请输入要添加的用户数量:" userNum
     echo
     if [[ -z ${userNum} || ${userNum} -le 0 ]]; then
@@ -4893,10 +4946,16 @@ addUserXray() {
             clients=$(jq -r ".auth.config = ${clients}" ${hysteriaConfigPath}config.json)
             echo "${clients}" | jq . >${hysteriaConfigPath}config.json
         fi
+
+        if echo ${currentInstallProtocolType} | grep -q 9; then
+            local tuicResult
+
+            tuicResult=$(jq -r ".users.\"${uuid}\" += \"${uuid}\"" ${tuicConfigPath}config.json)
+            echo "${tuicResult}" | jq . >${tuicConfigPath}config.json
+        fi
     done
 
     reloadCore
-    showAccounts >/dev/null
     echoContent green " ---> 添加完成"
     manageAccount 1
 }
@@ -5019,7 +5078,7 @@ addUser() {
 
 # 移除用户
 removeUser() {
-
+    local uuid=
     if echo ${currentInstallProtocolType} | grep -q 0 || echo ${currentInstallProtocolType} | grep -q trojan; then
         jq -r -c .inbounds[0].settings.clients[].email ${configPath}${frontingType}.json | awk '{print NR""":"$0}'
         read -r -p "请选择要删除的用户编号[仅支持单个删除]:" delUserIndex
@@ -5028,6 +5087,7 @@ removeUser() {
         else
             delUserIndex=$((delUserIndex - 1))
             local vlessTcpResult
+            uuid=$(jq -r ".inbounds[0].settings.clients[${delUserIndex}].id" ${configPath}${frontingType}.json)
             vlessTcpResult=$(jq -r 'del(.inbounds[0].settings.clients['${delUserIndex}'])' ${configPath}${frontingType}.json)
             echo "${vlessTcpResult}" | jq . >${configPath}${frontingType}.json
         fi
@@ -5039,10 +5099,12 @@ removeUser() {
         else
             delUserIndex=$((delUserIndex - 1))
             local vlessRealityResult
+            uuid=$(jq -r ".inbounds[0].settings.clients[${delUserIndex}].id" ${configPath}${frontingType}.json)
             vlessRealityResult=$(jq -r 'del(.inbounds[0].settings.clients['${delUserIndex}'])' ${configPath}07_VLESS_vision_reality_inbounds.json)
             echo "${vlessRealityResult}" | jq . >${configPath}07_VLESS_vision_reality_inbounds.json
         fi
     fi
+
     if [[ -n "${delUserIndex}" ]]; then
         if echo ${currentInstallProtocolType} | grep -q 1; then
             local vlessWSResult
@@ -5091,6 +5153,11 @@ removeUser() {
             echo "${vlessRealityGRPCResult}" | jq . >${configPath}08_VLESS_reality_fallback_grpc_inbounds.json
         fi
 
+        if echo ${currentInstallProtocolType} | grep -q 9; then
+            local tuicResult
+            tuicResult=$(jq -r "del(.users.\"${uuid}\")" ${tuicConfigPath}config.json)
+            echo "${tuicResult}" | jq . >${tuicConfigPath}config.json
+        fi
         reloadCore
     fi
     manageAccount 1
@@ -6798,7 +6865,7 @@ manageAccount() {
 
     echoContent red "\n=============================================================="
     echoContent yellow "# 添加单个用户时可自定义email和uuid"
-    echoContent yellow "# 如安装了Hysteria，账号会同时添加到Hysteria\n"
+    echoContent yellow "# 如安装了Hysteria或者Tuic，账号会同时添加到相应的类型下面\n"
     echoContent yellow "1.查看账号"
     echoContent yellow "2.查看订阅"
     echoContent yellow "3.添加订阅"
@@ -6809,7 +6876,7 @@ manageAccount() {
     if [[ "${manageAccountStatus}" == "1" ]]; then
         showAccounts 1
     elif [[ "${manageAccountStatus}" == "2" ]]; then
-        subscribe 1
+        subscribe
     elif [[ "${manageAccountStatus}" == "3" ]]; then
         addSubscribeMenu 1
     elif [[ "${manageAccountStatus}" == "4" ]]; then
@@ -6834,7 +6901,7 @@ addSubscribeMenu() {
         rm -rf /etc/v2ray-agent/subscribe_remote/clashMeta/*
         rm -rf /etc/v2ray-agent/subscribe_remote/default/*
         echoContent green " ---> 其他机器订阅删除成功"
-        subscribe 1
+        subscribe
     fi
 }
 # 添加其他机器clashMeta订阅
@@ -6896,26 +6963,68 @@ clashMetaConfig() {
     local url=$1
     local id=$2
     cat <<EOF >"/etc/v2ray-agent/subscribe/clashMetaProfiles/${id}"
-port: 7890
-socks-port: 7891
+mixed-port: 7890
+unified-delay: false
+geodata-mode: true
+tcp-concurrent: false
+find-process-mode: strict
+global-client-fingerprint: chrome
+
 allow-lan: true
-mode: Rule
-log-level: debug
-external-controller: 127.0.0.1:7908
+mode: rule
+log-level: info
+ipv6: true
+
+external-controller: 127.0.0.1:9090
+
+geox-url:
+  geoip: "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"
+  geosite: "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"
+  mmdb: "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb"
+
+profile:
+  store-selected: true
+  store-fake-ip: true
+
+sniffer:
+  enable: false
+  sniff:
+    TLS:
+      ports: [443]
+    HTTP:
+      ports: [80]
+      override-destination: true
+
+tun:
+  enable: true
+  stack: system
+  dns-hijack:
+    - 'any:53'
+  auto-route: true
+  auto-detect-interface: true
+
 dns:
   enable: true
-  ipv6: false
-  listen: 0.0.0.0:53
-  enhanced-mode: redir-host
-  nameserver:
-    - https://doh.pub/dns-query
-    - tls://dot.pub:853
-    - https://223.5.5.5/dns-query
-    - tls://223.5.5.5:853
+  listen: 0.0.0.0:1053
+  ipv6: true
+  enhanced-mode: fake-ip
+  fake-ip-range: 28.0.0.1/8
+  fake-ip-filter:
+  - '*'
+  - '+.lan'
   default-nameserver:
-    - 114.114.114.114
-    - 119.29.29.29
+  - 223.5.5.5
+  nameserver:
+  - 'tls://8.8.4.4#DNS_Proxy'
+  - 'tls://1.0.0.1#DNS_Proxy'
+  proxy-server-nameserver:
+  - https://dns.alidns.com/dns-query#h3=true
+  nameserver-policy:
+    "geosite:cn,private":
     - 223.5.5.5
+    - 114.114.114.114
+    - https://dns.alidns.com/dns-query#h3=true
+
 proxy-providers:
   provider1:
     type: http
@@ -6926,6 +7035,7 @@ proxy-providers:
       enable: false
       url: http://www.gstatic.com/generate_204
       interval: 300
+
 proxy-groups:
   - name: 节点选择
     type: select
@@ -6984,6 +7094,15 @@ proxy-groups:
     proxies:
       - 手动切换
       - 自动选择
+  - name: DNS_Proxy
+    type: select
+    use:
+      - provider1
+    proxies:
+      - 自动选择
+      - 节点选择
+      - DIRECT
+
   - name: Telegram
     type: select
     use:
@@ -7029,7 +7148,6 @@ proxy-groups:
     proxies:
       - 节点选择
       - 自动选择
-
   - name: Disney
     type: select
     use:
@@ -7087,6 +7205,12 @@ proxy-groups:
       - 手动切换
       - 自动选择
 rule-providers:
+  lan:
+    type: http
+    behavior: classical
+    interval: 86400
+    url: https://ghproxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Lan/Lan.yaml
+    path: ./Rules/lan.yaml
   reject:
     type: http
     behavior: domain
@@ -7134,18 +7258,6 @@ rule-providers:
     behavior: ipcidr
     url: https://ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/telegramcidr.txt
     path: ./ruleset/telegramcidr.yaml
-    interval: 86400
-  cncidr:
-    type: http
-    behavior: ipcidr
-    url: https://ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/cncidr.txt
-    path: ./ruleset/cncidr.yaml
-    interval: 86400
-  lancidr:
-    type: http
-    behavior: ipcidr
-    url: https://ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/lancidr.txt
-    path: ./ruleset/lancidr.yaml
     interval: 86400
   applications:
     type: http
@@ -7207,25 +7319,36 @@ rule-providers:
     url: https://ghproxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Spotify/Spotify.yaml
     path: ./ruleset/spotify.yaml
     interval: 86400
+  ChinaMaxDomain:
+    type: http
+    behavior: domain
+    interval: 86400
+    url: https://ghproxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax/ChinaMax_Domain.yaml
+    path: ./Rules/ChinaMaxDomain.yaml
+  ChinaMaxIPNoIPv6:
+    type: http
+    behavior: ipcidr
+    interval: 86400
+    url: https://ghproxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax/ChinaMax_IP_No_IPv6.yaml
+    path: ./Rules/ChinaMaxIPNoIPv6.yaml
 rules:
-  - GEOIP,LAN,本地直连
-  - GEOIP,CN,本地直连
-  - RULE-SET,applications,本地直连
-  - RULE-SET,direct,本地直连
-  - RULE-SET,lancidr,本地直连
-  - RULE-SET,cncidr,本地直连
+  - RULE-SET,Google,Google,no-resolve
+  - RULE-SET,YouTube,YouTube,no-resolve
   - RULE-SET,GitHub,GitHub
-  - RULE-SET,telegramcidr,Telegram
-  - RULE-SET,YouTube,YouTube
-  - RULE-SET,Spotify,Spotify
+  - RULE-SET,telegramcidr,Telegram,no-resolve
+  - RULE-SET,Spotify,Spotify,no-resolve
   - RULE-SET,Netflix,Netflix
   - RULE-SET,HBO,HBO
   - RULE-SET,Bing,Bing
   - RULE-SET,OpenAI,OpenAI
   - RULE-SET,Disney,Disney
-  - RULE-SET,Google,Google
   - RULE-SET,proxy,全球代理
   - RULE-SET,gfw,全球代理
+  - RULE-SET,applications,本地直连
+  - RULE-SET,ChinaMaxDomain,本地直连
+  - RULE-SET,ChinaMaxIPNoIPv6,本地直连,no-resolve
+  - RULE-SET,lan,本地直连,no-resolve
+  - GEOIP,CN,本地直连,no-resolve
   - MATCH,漏网之鱼
 EOF
 
@@ -7672,7 +7795,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "作者：mack-a"
-    echoContent green "当前版本：v2.9.17"
+    echoContent green "当前版本：v2.9.21"
     echoContent green "Github：https://github.com/mack-a/v2ray-agent"
     echoContent green "描述：八合一共存脚本\c"
     showInstallStatus
@@ -7751,15 +7874,8 @@ menu() {
     10)
         updateV2RayCDN 1
         ;;
-        #    10)
-        #        ipv6Routing 1
-        #        ;;
-        #    11)
-        #        warpRouting 1
-        #        ;;
     11)
         routingToolsMenu 1
-        #        streamingToolbox 1
         ;;
     12)
         addCorePort 1
