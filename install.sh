@@ -499,9 +499,10 @@ getPublicIP() {
         type=$1
     fi
     local currentIP=
-    currentIP=$(curl -s "-${type}" http://www.cloudflare.com/cdn-cgi/trace | grep "ip" | awk -F "[=]" '{print $2}')
-    if [[ -z "${currentIP}" ]]; then
-        currentIP=$(curl -s "-${type}" http://www.cloudflare.com/cdn-cgi/trace | grep "ip" | awk -F "[=]" '{print $2}')
+    if [[ "$type" == "4" ]]; then
+        currentIP=$(ifconfig eth0 | grep -oE 'inet ([0-9]{1,3}\.){3}[0-9]{1,3}' | awk '{print $2}')
+    else
+        currentIP=$(ifconfig eth0 | grep -oE 'inet6 ([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}' | awk '{print $2}' | head -n 1)
     fi
     echo "${currentIP}"
 }
@@ -4192,6 +4193,7 @@ EOF
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${email}"
   - name: "${email}_tuic"
     server: ${currentHost}
+    ip: "$(getPublicIP)"
     type: tuic
     port: ${tuicPort}
     uuid: ${id}
@@ -4202,13 +4204,23 @@ EOF
     disable-sni: true
     reduce-rtt: true
     fast-open: true
-    heartbeat-interval: 8000
     request-timeout: 8000
     max-udp-relay-packet-size: 1500
-    max-open-streams: 100
-    ip-version: dual
-    smux:
-        enabled: false
+  - name: "${email}_tuic_v6"
+    server: ${currentHost}
+    ip: "$(getPublicIP 6)"
+    type: tuic
+    port: ${tuicPort}
+    uuid: ${id}
+    password: ${id}
+    alpn:
+     - h3
+    congestion-controller: ${tuicAlgorithm}
+    disable-sni: true
+    reduce-rtt: true
+    fast-open: true
+    request-timeout: 8000
+    max-udp-relay-packet-size: 1500
 EOF
     fi
 
